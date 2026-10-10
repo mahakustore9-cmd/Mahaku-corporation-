@@ -4,6 +4,10 @@ import { SupabaseConfig, User } from '../types';
 const STORAGE_KEY_CONFIG = 'suraksha_supabase_config';
 export const STUDENT_PHOTOS_BUCKET = 'student-photos';
 
+export const PERMANENT_SUPABASE_URL = 'https://kzbnwvztiojwnfhnposz.supabase.co';
+export const PERMANENT_SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt6Ym53dnp0aW9qd25maG5wb3N6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE1OTYzMjgsImV4cCI6MjEwNzE3MjMyOH0.0GpI-6yApf5Fzlt0ElT7yTZAPufElJr0ObSp8q1j2d8';
+
 /**
  * Normalizes and sanitizes Supabase URL to prevent "Invalid path specified in request URL"
  * Converts dashboard URLs (https://supabase.com/dashboard/project/xxxx) to API URLs (https://xxxx.supabase.co)
@@ -39,13 +43,14 @@ export function getStoredSupabaseConfig(): SupabaseConfig {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && (parsed.url || parsed.anonKey)) {
-        const cleanUrl = normalizeSupabaseUrl(parsed.url || '');
+        const cleanUrl = normalizeSupabaseUrl(parsed.url || PERMANENT_SUPABASE_URL);
+        const cleanKey = (parsed.anonKey || PERMANENT_SUPABASE_ANON_KEY).trim();
         return {
           ...parsed,
           url: cleanUrl,
-          anonKey: (parsed.anonKey || '').trim(),
+          anonKey: cleanKey,
           bucketName: STUDENT_PHOTOS_BUCKET,
-          isConnected: Boolean(cleanUrl && parsed.anonKey),
+          isConnected: Boolean(cleanUrl && cleanKey),
         };
       }
     }
@@ -54,10 +59,12 @@ export function getStoredSupabaseConfig(): SupabaseConfig {
   }
 
   const envUrl = normalizeSupabaseUrl(
-    (import.meta as unknown as { env: Record<string, string> }).env.VITE_SUPABASE_URL || ''
+    (import.meta as unknown as { env: Record<string, string> }).env.VITE_SUPABASE_URL ||
+      PERMANENT_SUPABASE_URL
   );
   const envKey = (
-    (import.meta as unknown as { env: Record<string, string> }).env.VITE_SUPABASE_ANON_KEY || ''
+    (import.meta as unknown as { env: Record<string, string> }).env.VITE_SUPABASE_ANON_KEY ||
+      PERMANENT_SUPABASE_ANON_KEY
   ).trim();
 
   return {
