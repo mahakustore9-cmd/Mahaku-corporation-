@@ -1,6 +1,11 @@
 import { DailyScan, School, StepType, Student, User, JOURNEY_STEPS } from '../types';
 import { speakHindiText, broadcastScanNotification, showSystemNotification } from './soundService';
-import { getSupabase, isSupabaseConfigured } from './supabaseClient';
+import {
+  getStudentPhotoBucketUrl,
+  getSupabase,
+  isSupabaseConfigured,
+  sanitizePhotoUrl,
+} from './supabaseClient';
 
 const KEY_SCHOOLS = 'suraksha_schools_v4';
 const KEY_USERS = 'suraksha_users_v4';
@@ -134,7 +139,19 @@ export class DBStore {
       localStorage.setItem(KEY_SCHOOLS, JSON.stringify(sanitizedSchools));
 
       const students: Student[] = JSON.parse(localStorage.getItem(KEY_STUDENTS) || '[]');
-      const sanitizedStudents = students.filter((s) => s.id !== 'std_aarav' && s.rollNo !== 'R-101');
+      const sanitizedStudents = students
+        .filter((s) => s.id !== 'std_aarav' && s.rollNo !== 'R-101')
+        .map((s) => {
+          const cleanKey =
+            s.photoKey || `std_${(s.rollNo || 'std').replace(/[^a-zA-Z0-9]/g, '').toLowerCase()}.jpg`;
+          const cleanUrl = sanitizePhotoUrl(s.photoUrl) || getStudentPhotoBucketUrl(cleanKey);
+          return {
+            ...s,
+            photoKey: cleanKey,
+            photoUrl: cleanUrl,
+            photoDataUrl: undefined,
+          };
+        });
       localStorage.setItem(KEY_STUDENTS, JSON.stringify(sanitizedStudents));
     } catch {
       // ignore
@@ -264,28 +281,34 @@ export class DBStore {
         .select('*')
         .order('created_at', { ascending: false });
       if (!studentsErr && Array.isArray(studentsData)) {
-        const students: Student[] = studentsData.map((std) => ({
-          id: std.id,
-          schoolId: std.school_id,
-          schoolName: std.school_name,
-          name: std.name,
-          rollNo: std.roll_no,
-          className: std.class_name,
-          bloodGroup: std.blood_group || 'B+',
-          fatherName: std.father_name,
-          motherName: std.mother_name || '',
-          parentPhone: std.parent_phone,
-          emergencyPhone: std.emergency_phone,
-          address: std.address || '',
-          photoKey: std.photo_key || 'std_photo.jpg',
-          photoDataUrl: std.photo_data_url || '',
-          qrToken: std.qr_token,
-          parentId: std.parent_id,
-          parentUsername: std.parent_username,
-          parentPassword: std.parent_password,
-          isActive: std.is_active ?? true,
-          createdAt: std.created_at || new Date().toISOString(),
-        }));
+        const students: Student[] = studentsData.map((std) => {
+          const photoKey = std.photo_key || 'std_photo.jpg';
+          const cleanPhotoUrl =
+            sanitizePhotoUrl(std.photo_url) || getStudentPhotoBucketUrl(photoKey);
+          return {
+            id: std.id,
+            schoolId: std.school_id,
+            schoolName: std.school_name,
+            name: std.name,
+            rollNo: std.roll_no,
+            className: std.class_name,
+            bloodGroup: std.blood_group || 'B+',
+            fatherName: std.father_name,
+            motherName: std.mother_name || '',
+            parentPhone: std.parent_phone,
+            emergencyPhone: std.emergency_phone,
+            address: std.address || '',
+            photoKey,
+            photoUrl: cleanPhotoUrl,
+            photoDataUrl: undefined,
+            qrToken: std.qr_token,
+            parentId: std.parent_id,
+            parentUsername: std.parent_username,
+            parentPassword: std.parent_password,
+            isActive: std.is_active ?? true,
+            createdAt: std.created_at || new Date().toISOString(),
+          };
+        });
         localStorage.setItem(KEY_STUDENTS, JSON.stringify(students));
       }
 
@@ -365,6 +388,9 @@ export class DBStore {
 
       const students = this.getStudents();
       for (const std of students) {
+        const photoKey = std.photoKey || 'std_photo.jpg';
+        const cleanPhotoUrl =
+          sanitizePhotoUrl(std.photoUrl) || getStudentPhotoBucketUrl(photoKey);
         await supabase.from('students').upsert({
           id: std.id,
           school_id: std.schoolId,
@@ -378,8 +404,8 @@ export class DBStore {
           parent_phone: std.parentPhone,
           emergency_phone: std.emergencyPhone,
           address: std.address,
-          photo_key: std.photoKey,
-          photo_data_url: std.photoDataUrl,
+          photo_key: photoKey,
+          photo_url: cleanPhotoUrl,
           qr_token: std.qrToken,
           parent_id: std.parentId,
           parent_username: std.parentUsername,
@@ -697,9 +723,18 @@ export class DBStore {
 
   public addStudent(studentData: Omit<Student, 'id' | 'createdAt'>): Student {
     const students = this.getStudents();
+    const photoKey =
+      studentData.photoKey ||
+      `std_${(studentData.rollNo || 'std').replace(/[^a-zA-Z0-9]/g, '').toLowerCase()}.jpg`;
+    const cleanPhotoUrl =
+      sanitizePhotoUrl(studentData.photoUrl) || getStudentPhotoBucketUrl(photoKey);
+
     const newStudent: Student = {
       ...studentData,
       id: `std_${Date.now()}`,
+      photoKey,
+      photoUrl: cleanPhotoUrl,
+      photoDataUrl: undefined,
       createdAt: new Date().toISOString(),
     };
     students.unshift(newStudent);
@@ -722,8 +757,8 @@ export class DBStore {
           parent_phone: newStudent.parentPhone,
           emergency_phone: newStudent.emergencyPhone,
           address: newStudent.address,
-          photo_key: newStudent.photoKey,
-          photo_data_url: newStudent.photoDataUrl,
+          photo_key: photoKey,
+          photo_url: cleanPhotoUrl,
           qr_token: newStudent.qrToken,
           parent_id: newStudent.parentId,
           parent_username: newStudent.parentUsername,
@@ -742,7 +777,18 @@ export class DBStore {
     const students = this.getStudents();
     const idx = students.findIndex((s) => s.id === studentId);
     if (idx === -1) return null;
-    students[idx] = { ...students[idx], ...updatedData };
+
+    const cleanPhotoUrl = updatedData.photoUrl
+      ? sanitizePhotoUrl(updatedData.photoUrl)
+      : undefined;
+
+    const sanitizedData = {
+      ...updatedData,
+      ...(cleanPhotoUrl !== undefined ? { photoUrl: cleanPhotoUrl } : {}),
+      photoDataUrl: undefined,
+    };
+
+    students[idx] = { ...students[idx], ...sanitizedData };
     localStorage.setItem(KEY_STUDENTS, JSON.stringify(students));
 
     const supabase = getSupabase();
@@ -758,8 +804,7 @@ export class DBStore {
       if (updatedData.emergencyPhone !== undefined)
         dbPayload.emergency_phone = updatedData.emergencyPhone;
       if (updatedData.address !== undefined) dbPayload.address = updatedData.address;
-      if (updatedData.photoDataUrl !== undefined)
-        dbPayload.photo_data_url = updatedData.photoDataUrl;
+      if (cleanPhotoUrl !== undefined) dbPayload.photo_url = cleanPhotoUrl;
       if (updatedData.photoKey !== undefined) dbPayload.photo_key = updatedData.photoKey;
       if (updatedData.isActive !== undefined) dbPayload.is_active = updatedData.isActive;
       if (updatedData.parentUsername !== undefined)

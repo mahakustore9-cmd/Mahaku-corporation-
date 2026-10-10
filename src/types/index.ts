@@ -108,7 +108,8 @@ export interface Student {
   emergencyPhone: string;
   address: string;
   photoKey: string;      // short storage key, e.g. "std_101.jpg" (<50KB in bucket)
-  photoDataUrl?: string; // preview image
+  photoUrl?: string;     // public Supabase bucket URL (short, NOT base64!)
+  photoDataUrl?: string; // local temporary preview only in browser
   qrToken: string;       // unique QR payload
   parentId?: string;
   parentUsername?: string;

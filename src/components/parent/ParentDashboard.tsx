@@ -19,6 +19,7 @@ import {
   unlockAudio,
   NOTIFICATION_EVENT,
 } from '../../services/soundService';
+import { getStudentPhotoSrc } from '../../services/supabaseClient';
 import { StudentIdCardModal } from '../schooladmin/StudentIdCardModal';
 import { useLanguage } from '../../services/languageContext';
 
@@ -226,11 +227,14 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
             <div className="w-16 h-20 rounded-2xl overflow-hidden border-2 border-blue-400 shadow-xs bg-slate-100 shrink-0 relative">
-              {student.photoDataUrl ? (
+              {getStudentPhotoSrc(student) ? (
                 <img
-                  src={student.photoDataUrl}
+                  src={getStudentPhotoSrc(student)}
                   alt={student.name}
                   className="w-full h-full object-cover"
+                  onError={(e) => {
+                    (e.target as HTMLElement).style.display = 'none';
+                  }}
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center font-bold text-blue-600 text-xl">

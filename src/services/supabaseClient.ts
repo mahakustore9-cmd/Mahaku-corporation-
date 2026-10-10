@@ -139,6 +139,51 @@ export function resetSupabaseClient(config: SupabaseConfig): SupabaseClient | nu
   return null;
 }
 
+export function getStudentPhotoBucketUrl(photoKey: string): string {
+  if (!photoKey) return '';
+  if (photoKey.startsWith('http://') || photoKey.startsWith('https://')) {
+    return photoKey;
+  }
+  const config = getStoredSupabaseConfig();
+  const baseUrl = config.url || PERMANENT_SUPABASE_URL;
+  return `${baseUrl}/storage/v1/object/public/${STUDENT_PHOTOS_BUCKET}/${photoKey}`;
+}
+
+/**
+ * Ensures photo URL is strictly a clean HTTP/HTTPS URL.
+ * Strictly strips any base64 data URLs to prevent table bloat.
+ */
+export function sanitizePhotoUrl(url?: string): string {
+  if (!url) return '';
+  if (url.startsWith('data:')) {
+    return '';
+  }
+  return url.trim();
+}
+
+/**
+ * Resolves the display image source for a student:
+ * Prefers Supabase storage public URL or short bucket key.
+ * Never displays broken data URLs.
+ */
+export function getStudentPhotoSrc(student?: {
+  photoUrl?: string;
+  photoDataUrl?: string;
+  photoKey?: string;
+} | null): string {
+  if (!student) return '';
+  if (student.photoUrl && !student.photoUrl.startsWith('data:')) {
+    return student.photoUrl;
+  }
+  if (student.photoKey && !student.photoKey.startsWith('data:')) {
+    return getStudentPhotoBucketUrl(student.photoKey);
+  }
+  if (student.photoDataUrl && !student.photoDataUrl.startsWith('data:')) {
+    return student.photoDataUrl;
+  }
+  return '';
+}
+
 /**
  * Uploads student photo (<50KB) directly to Supabase storage bucket
  * Returns public URL for minimal database footprint (<300 bytes per student)
@@ -164,15 +209,26 @@ export async function uploadStudentPhotoToSupabase(
 
     if (uploadErr) {
       console.warn('Supabase storage upload error:', uploadErr);
-      return null;
+      try {
+        await supabase.storage.createBucket(STUDENT_PHOTOS_BUCKET, { public: true });
+        await supabase.storage.from(STUDENT_PHOTOS_BUCKET).upload(cleanKey, photoBlob, {
+          cacheControl: '3600',
+          upsert: true,
+          contentType: 'image/jpeg',
+        });
+      } catch {
+        // ignore
+      }
     }
 
     const { data: urlData } = supabase.storage
       .from(STUDENT_PHOTOS_BUCKET)
       .getPublicUrl(cleanKey);
 
+    const publicUrl = urlData?.publicUrl || getStudentPhotoBucketUrl(cleanKey);
+
     return {
-      publicUrl: urlData?.publicUrl || '',
+      publicUrl,
       key: cleanKey,
     };
   } catch (err) {
@@ -499,7 +555,7 @@ CREATE TABLE IF NOT EXISTS public.students (
     emergency_phone VARCHAR(20) NOT NULL,
     address VARCHAR(200),
     photo_key VARCHAR(80) DEFAULT 'std_photo.jpg',
-    photo_data_url TEXT,
+    photo_url VARCHAR(255),
     qr_token VARCHAR(80) UNIQUE NOT NULL,
     parent_id VARCHAR(64),
     parent_username VARCHAR(60),
@@ -507,6 +563,10 @@ CREATE TABLE IF NOT EXISTS public.students (
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migration for photo_url (removes heavy photo_data_url from table)
+ALTER TABLE public.students ADD COLUMN IF NOT EXISTS photo_url VARCHAR(255);
+ALTER TABLE public.students DROP COLUMN IF EXISTS photo_data_url;
 
 -- High speed indexes
 CREATE INDEX IF NOT EXISTS idx_students_qr ON public.students(qr_token);

@@ -4,14 +4,14 @@
  * Ensures 10,000+ students fit comfortably within Supabase free tier limits.
  */
 
-import { uploadStudentPhotoToSupabase } from './supabaseClient';
+import { getStudentPhotoBucketUrl, uploadStudentPhotoToSupabase } from './supabaseClient';
 
 export interface CompressedImageResult {
   blob: Blob;
-  dataUrl: string;
+  dataUrl: string; // for local modal preview only
   sizeKb: number;
   shortKey: string;
-  publicUrl?: string;
+  publicUrl: string; // clean Supabase bucket URL, never base64
 }
 
 /**
@@ -85,15 +85,17 @@ export async function compressStudentPhoto(
         const cleanRoll = suggestedRollNo.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() || 'std';
         const shortKey = `std_${cleanRoll}.jpg`;
 
+        // Direct public URL for storage bucket (strictly NO base64 in database)
+        let publicUrl = getStudentPhotoBucketUrl(shortKey);
+
         // Attempt live upload to Supabase bucket if connected
-        let publicUrl: string | undefined = undefined;
         try {
           const uploadRes = await uploadStudentPhotoToSupabase(blob, shortKey);
           if (uploadRes?.publicUrl) {
             publicUrl = uploadRes.publicUrl;
           }
         } catch {
-          // fallback to dataUrl
+          // ignore
         }
 
         resolve({

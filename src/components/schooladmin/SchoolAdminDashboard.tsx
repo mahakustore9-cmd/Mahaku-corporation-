@@ -31,6 +31,11 @@ import {
 import { Student, User, UserRole, StepType, JOURNEY_STEPS } from '../../types';
 import { dbStore, getTodayDateString } from '../../services/dbStore';
 import { compressStudentPhoto } from '../../services/imageCompression';
+import {
+  getStudentPhotoBucketUrl,
+  getStudentPhotoSrc,
+  uploadStudentPhotoToSupabase,
+} from '../../services/supabaseClient';
 import { StudentIdCardModal } from './StudentIdCardModal';
 import { useLanguage } from '../../services/languageContext';
 
@@ -95,7 +100,9 @@ export const SchoolAdminDashboard: React.FC<SchoolAdminDashboardProps> = ({
   const [stdEmergencyPhone, setStdEmergencyPhone] = useState('');
   const [stdAddress, setStdAddress] = useState('');
   const [photoPreview, setPhotoPreview] = useState<string>('');
+  const [compressedPhotoBlob, setCompressedPhotoBlob] = useState<Blob | null>(null);
   const [isCompressing, setIsCompressing] = useState(false);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
   // Dedicated Parent Login Credentials inside Add Student
   const [parentUsername, setParentUsername] = useState('');
@@ -149,6 +156,7 @@ export const SchoolAdminDashboard: React.FC<SchoolAdminDashboardProps> = ({
     setStdEmergencyPhone('');
     setStdAddress('');
     setPhotoPreview('');
+    setCompressedPhotoBlob(null);
     setParentUsername('');
     setParentPassword('parent123');
     setShowPasswordText(false);
@@ -169,11 +177,14 @@ export const SchoolAdminDashboard: React.FC<SchoolAdminDashboardProps> = ({
     if (!file) return;
     setIsCompressing(true);
     try {
-      const compressed = await compressStudentPhoto(file);
-      setPhotoPreview(compressed.dataUrl);
+      const cleanRoll =
+        (stdRoll || 'std').trim().toLowerCase().replace(/[^a-z0-9]/g, '') || 'std';
+      const compressed = await compressStudentPhoto(file, cleanRoll);
+      setPhotoPreview(compressed.dataUrl); // local preview for UI
+      setCompressedPhotoBlob(compressed.blob);
       showToast(
         language === 'en'
-          ? `Photo compressed successfully (${compressed.sizeKb} KB)`
+          ? `Photo compressed successfully (${compressed.sizeKb} KB, <50KB safe)`
           : `फोटो सफलतापूर्वक कंप्रेस हुई (${compressed.sizeKb} KB, <50KB सुरक्षित)`
       );
     } catch {
@@ -204,12 +215,29 @@ export const SchoolAdminDashboard: React.FC<SchoolAdminDashboardProps> = ({
   const handleCreateStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanRoll = stdRoll.trim().replace(/\s+/g, '_');
-    const photoKey = `std_${cleanRoll.toLowerCase()}.jpg`;
+    const cleanRollLower = cleanRoll.toLowerCase().replace(/[^a-z0-9]/g, '') || 'std';
+    const photoKey = `std_${cleanRollLower}.jpg`;
     const qrToken = `SURAKSHA_STD_${cleanRoll.toUpperCase()}_${Date.now().toString().slice(-4)}`;
     const finalParentUsername =
       parentUsername.trim().toLowerCase() ||
-      `parent_${cleanRoll.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+      `parent_${cleanRollLower}`;
     const finalParentPassword = parentPassword.trim() || 'parent123';
+
+    let finalPhotoUrl = getStudentPhotoBucketUrl(photoKey);
+
+    if (compressedPhotoBlob) {
+      setIsUploadingPhoto(true);
+      try {
+        const uploadRes = await uploadStudentPhotoToSupabase(compressedPhotoBlob, photoKey);
+        if (uploadRes?.publicUrl) {
+          finalPhotoUrl = uploadRes.publicUrl;
+        }
+      } catch (err) {
+        console.warn('Storage upload error:', err);
+      } finally {
+        setIsUploadingPhoto(false);
+      }
+    }
 
     const newStudent = dbStore.addStudent({
       schoolId: currentUser.schoolId || 'sch_default',
@@ -223,7 +251,7 @@ export const SchoolAdminDashboard: React.FC<SchoolAdminDashboardProps> = ({
       emergencyPhone: stdEmergencyPhone.trim() || stdParentPhone.trim(),
       address: stdAddress.trim(),
       photoKey,
-      photoDataUrl: photoPreview || undefined,
+      photoUrl: finalPhotoUrl,
       qrToken,
       parentUsername: finalParentUsername,
       parentPassword: finalParentPassword,
@@ -254,9 +282,28 @@ export const SchoolAdminDashboard: React.FC<SchoolAdminDashboardProps> = ({
     setSelectedStudentForCard(newStudent);
   };
 
-  const handleUpdateStudent = (e: React.FormEvent) => {
+  const handleUpdateStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingStudent) return;
+    const cleanRoll = stdRoll.trim().replace(/\s+/g, '_');
+    const cleanRollLower = cleanRoll.toLowerCase().replace(/[^a-z0-9]/g, '') || 'std';
+    const photoKey = editingStudent.photoKey || `std_${cleanRollLower}.jpg`;
+    let finalPhotoUrl = editingStudent.photoUrl || getStudentPhotoBucketUrl(photoKey);
+
+    if (compressedPhotoBlob) {
+      setIsUploadingPhoto(true);
+      try {
+        const uploadRes = await uploadStudentPhotoToSupabase(compressedPhotoBlob, photoKey);
+        if (uploadRes?.publicUrl) {
+          finalPhotoUrl = uploadRes.publicUrl;
+        }
+      } catch (err) {
+        console.warn('Storage upload error:', err);
+      } finally {
+        setIsUploadingPhoto(false);
+      }
+    }
+
     const finalParentUsername =
       parentUsername.trim().toLowerCase() || editingStudent.parentUsername || 'parent';
     const finalParentPassword = parentPassword.trim() || editingStudent.parentPassword || 'parent123';
@@ -270,7 +317,8 @@ export const SchoolAdminDashboard: React.FC<SchoolAdminDashboardProps> = ({
       parentPhone: stdParentPhone.trim(),
       emergencyPhone: stdEmergencyPhone.trim() || stdParentPhone.trim(),
       address: stdAddress.trim(),
-      photoDataUrl: photoPreview || editingStudent.photoDataUrl,
+      photoKey,
+      photoUrl: finalPhotoUrl,
       parentUsername: finalParentUsername,
       parentPassword: finalParentPassword,
     });
@@ -310,7 +358,8 @@ export const SchoolAdminDashboard: React.FC<SchoolAdminDashboardProps> = ({
     setStdParentPhone(std.parentPhone);
     setStdEmergencyPhone(std.emergencyPhone || std.parentPhone);
     setStdAddress(std.address || '');
-    setPhotoPreview(std.photoDataUrl || '');
+    setPhotoPreview(getStudentPhotoSrc(std));
+    setCompressedPhotoBlob(null);
     setParentUsername(std.parentUsername || `parent_${std.rollNo.toLowerCase().replace(/[^a-z0-9]/g, '')}`);
     setParentPassword(std.parentPassword || 'parent123');
     setShowPasswordText(false);
@@ -826,11 +875,14 @@ export const SchoolAdminDashboard: React.FC<SchoolAdminDashboardProps> = ({
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-100">
                     <div className="flex items-center gap-3.5">
                       <div className="w-14 h-16 rounded-2xl overflow-hidden border-2 border-blue-500 bg-slate-100 shrink-0 shadow-xs">
-                        {std.photoDataUrl ? (
+                        {getStudentPhotoSrc(std) ? (
                           <img
-                            src={std.photoDataUrl}
+                            src={getStudentPhotoSrc(std)}
                             alt={std.name}
                             className="w-full h-full object-cover"
+                            onError={(e) => {
+                              (e.target as HTMLElement).style.display = 'none';
+                            }}
                           />
                         ) : (
                           <div className="w-full h-full flex items-center justify-center font-black text-blue-600 text-base">
@@ -985,11 +1037,14 @@ export const SchoolAdminDashboard: React.FC<SchoolAdminDashboardProps> = ({
                   <div className="p-4 space-y-3.5 flex-1 flex flex-col justify-between">
                     <div className="flex items-start gap-3.5">
                       <div className="w-16 h-20 rounded-2xl overflow-hidden border-2 border-blue-400 bg-slate-100 shrink-0 shadow-xs relative">
-                        {std.photoDataUrl ? (
+                        {getStudentPhotoSrc(std) ? (
                           <img
-                            src={std.photoDataUrl}
+                            src={getStudentPhotoSrc(std)}
                             alt={std.name}
                             className="w-full h-full object-cover group-hover:scale-105 transition"
+                            onError={(e) => {
+                              (e.target as HTMLElement).style.display = 'none';
+                            }}
                           />
                         ) : (
                           <div className="w-full h-full flex flex-col items-center justify-center font-black text-blue-600 text-lg bg-blue-50">

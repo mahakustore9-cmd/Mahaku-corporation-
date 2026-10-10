@@ -16,6 +16,7 @@ import {
 import { Student, School } from '../../types';
 import { dbStore } from '../../services/dbStore';
 import { useLanguage } from '../../services/languageContext';
+import { getStudentPhotoSrc } from '../../services/supabaseClient';
 
 interface StudentIdCardModalProps {
   student: Student | null;
@@ -124,11 +125,14 @@ export const StudentIdCardModal: React.FC<StudentIdCardModalProps> = ({ student,
         <div className="flex gap-3 items-start">
           <div className="relative shrink-0">
             <div className="w-24 h-28 rounded-2xl overflow-hidden border-2 border-blue-900 bg-slate-100 shadow-md">
-              {student.photoDataUrl ? (
+              {getStudentPhotoSrc(student) ? (
                 <img
-                  src={student.photoDataUrl}
+                  src={getStudentPhotoSrc(student)}
                   alt={student.name}
                   className="w-full h-full object-cover"
+                  onError={(e) => {
+                    (e.target as HTMLElement).style.display = 'none';
+                  }}
                 />
               ) : (
                 <div className="w-full h-full flex flex-col items-center justify-center bg-blue-100 text-blue-900 text-sm font-black">
