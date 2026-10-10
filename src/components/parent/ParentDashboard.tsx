@@ -334,13 +334,67 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   const currentDayData = past5Days[selectedDayIndex] || past5Days[0];
   const todayJourney = dbStore.getStudentDailyJourney(student.id, today);
 
-  const openWhatsAppToSchool = () => {
+  // Verified School Contacts (Strictly isolated to this student's school)
+  const schoolId = student.schoolId || currentUser.schoolId || '';
+  const currentSchool = dbStore.getSchools().find((s) => s.id === schoolId);
+  const schoolStaff = dbStore
+    .getUsers()
+    .filter((u) => u.schoolId === schoolId && u.isActive);
+
+  // 1. Principal (School Admin)
+  const principalUser = schoolStaff.find((u) => u.role === 'SCHOOL_ADMIN');
+  const principalName =
+    principalUser?.fullName ||
+    currentSchool?.principalName ||
+    (language === 'en' ? 'School Principal' : 'प्रधानाचार्य');
+  const principalPhone = (principalUser?.phone || currentSchool?.phone || '').trim();
+
+  // 2. Class Teacher (strictly matching student's class, or teacher in this school)
+  const classTeacherUser =
+    schoolStaff.find(
+      (u) =>
+        u.role === 'TEACHER' &&
+        u.assignedClass &&
+        student.className &&
+        (u.assignedClass.trim().toLowerCase() === student.className.trim().toLowerCase() ||
+          u.assignedClass.toLowerCase().includes(student.className.toLowerCase()) ||
+          student.className.toLowerCase().includes(u.assignedClass.toLowerCase()))
+    ) || schoolStaff.find((u) => u.role === 'TEACHER');
+  const teacherName =
+    classTeacherUser?.fullName || (language === 'en' ? 'Class Teacher' : 'कक्षा शिक्षक');
+  const teacherPhone = (classTeacherUser?.phone || '').trim();
+
+  // 3. Gate Guard (Guard of this school)
+  const gateGuardUser = schoolStaff.find((u) => u.role === 'GUARD');
+  const guardName =
+    gateGuardUser?.fullName || (language === 'en' ? 'Gate Guard' : 'गेट सुरक्षा गार्ड');
+  const guardPhone = (gateGuardUser?.phone || '').trim();
+
+  const openWhatsAppTo = (
+    targetPhone: string,
+    roleTitle: string,
+    contactName: string
+  ) => {
+    const cleanDigits = targetPhone.replace(/[^0-9]/g, '');
+    if (!cleanDigits) return;
+    const fullWaNumber = cleanDigits.length === 10 ? `91${cleanDigits}` : cleanDigits;
+    const schoolName = student.schoolName || currentSchool?.name || 'स्कूल';
     const text = encodeURIComponent(
       language === 'en'
-        ? `Hello! I am the parent of ${student.name} (${student.rollNo}, ${student.className}). I would like to inquire regarding today's attendance/journey.`
-        : `नमस्ते! मैं ${student.name} (${student.rollNo}, ${student.className}) का अभिभावक हूँ। मुझे आज की उपस्थिति/यात्रा के संबंध में जानकारी चाहिए।`
+        ? `Hello ${contactName}! I am the parent of ${student.name} (Roll No: ${student.rollNo}, Class: ${student.className}) from ${schoolName}. I am contacting you regarding today's student safety journey.`
+        : `नमस्ते ${contactName}! मैं ${schoolName} के छात्र ${student.name} (रोल नं: ${student.rollNo}, कक्षा: ${student.className}) का अभिभावक हूँ। मैं आज की छात्र सुरक्षा यात्रा के संबंध में आपसे संपर्क कर रहा हूँ।`
     );
-    safeOpenUrl(`https://wa.me/919876543210?text=${text}`);
+    safeOpenUrl(`https://wa.me/${fullWaNumber}?text=${text}`);
+  };
+
+  const openWhatsAppToSchool = () => {
+    if (principalPhone) {
+      openWhatsAppTo(principalPhone, 'प्रधानाचार्य', principalName);
+    } else if (teacherPhone) {
+      openWhatsAppTo(teacherPhone, 'कक्षा शिक्षक', teacherName);
+    } else if (guardPhone) {
+      openWhatsAppTo(guardPhone, 'गेट गार्ड', guardName);
+    }
   };
 
   const handleTestVoice = () => {
@@ -844,93 +898,172 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
       {/* Emergency Contact & School Helpline Buttons */}
       <div ref={emergencyRef} className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm">
         <div className="flex items-center gap-2 mb-3">
-          <ShieldAlert className="w-5 h-5 text-amber-600" />
+          <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0" />
           <div>
             <h3 className="font-bold text-base text-slate-900">
               {language === 'en' ? 'Emergency School Helpline & SOS' : 'आपातकालीन स्कूल हेल्पलाइन व सहायता'}
             </h3>
             <p className="text-xs text-slate-500">
               {language === 'en'
-                ? 'Contact principal, class teacher or gate guard directly via WhatsApp or Call'
-                : 'प्रिंसिपल, कक्षा शिक्षक या गेट गार्ड से सीधे फोन या WhatsApp पर बात करें'}
+                ? `Direct verified contacts for ${student.schoolName || currentSchool?.name || 'School'} (Principal, Teacher & Guard only)`
+                : `${student.schoolName || currentSchool?.name || 'स्कूल'} के अधिकृत प्रधानाचार्य, कक्षा शिक्षक व गेट गार्ड के सीधे मोबाइल नंबर`}
             </p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-          <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* Card 1: Principal */}
+          <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col justify-between gap-3">
             <div>
-              <p className="text-xs font-bold text-slate-900">
-                {language === 'en' ? 'Principal' : 'प्रधानाचार्य (Principal)'}
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-wider text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
+                  {language === 'en' ? 'Principal' : 'प्रधानाचार्य'}
+                </span>
+                {principalPhone && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" title="सक्रिय संपर्क" />
+                )}
+              </div>
+              <p className="text-xs font-bold text-slate-900 mt-2 truncate">
+                {principalName}
               </p>
-              <p className="text-[10px] text-slate-500">+91 98765 43210</p>
+              {principalPhone ? (
+                <p className="text-xs font-mono font-bold text-slate-700 mt-0.5">
+                  {principalPhone}
+                </p>
+              ) : (
+                <p className="text-[11px] text-slate-400 italic mt-0.5">
+                  {language === 'en' ? 'No phone registered' : 'नंबर दर्ज नहीं'}
+                </p>
+              )}
             </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={openWhatsAppToSchool}
-                className="p-2 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition cursor-pointer"
-                title="WhatsApp"
-              >
-                <MessageCircle className="w-4 h-4" />
-              </button>
-              <a
-                href="tel:+919876543210"
-                className="p-2 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition"
-                title={t('call')}
-              >
-                <Phone className="w-4 h-4" />
-              </a>
-            </div>
+
+            {principalPhone ? (
+              <div className="flex items-center gap-2 pt-2 border-t border-slate-200/80">
+                <button
+                  onClick={() => openWhatsAppTo(principalPhone, 'प्रधानाचार्य', principalName)}
+                  className="flex-1 py-1.5 px-2 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 font-bold text-xs flex items-center justify-center gap-1.5 transition active:scale-95 touch-manipulation cursor-pointer"
+                  title="WhatsApp"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" />
+                  <span>WhatsApp</span>
+                </button>
+                <a
+                  href={`tel:${principalPhone.replace(/[^0-9+]/g, '')}`}
+                  className="flex-1 py-1.5 px-2 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 font-bold text-xs flex items-center justify-center gap-1.5 transition active:scale-95"
+                  title="Call"
+                >
+                  <Phone className="w-3.5 h-3.5" />
+                  <span>{language === 'en' ? 'Call' : 'कॉल'}</span>
+                </a>
+              </div>
+            ) : (
+              <div className="pt-2 border-t border-slate-200/80 text-[10px] text-slate-400 italic text-center">
+                {language === 'en' ? 'Contact via school office' : 'स्कूल कार्यालय से संपर्क करें'}
+              </div>
+            )}
           </div>
 
-          <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between">
+          {/* Card 2: Class Teacher */}
+          <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col justify-between gap-3">
             <div>
-              <p className="text-xs font-bold text-slate-900">
-                {language === 'en' ? 'Class Teacher' : 'कक्षा शिक्षक'}
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-wider text-purple-700 bg-purple-50 px-2 py-0.5 rounded-full border border-purple-200">
+                  {language === 'en' ? 'Class Teacher' : 'कक्षा शिक्षक'}
+                  {student.className ? ` (${student.className})` : ''}
+                </span>
+                {teacherPhone && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" title="सक्रिय संपर्क" />
+                )}
+              </div>
+              <p className="text-xs font-bold text-slate-900 mt-2 truncate">
+                {classTeacherUser ? teacherName : (language === 'en' ? 'Class Teacher' : 'कक्षा शिक्षक')}
               </p>
-              <p className="text-[10px] text-slate-500">+91 98333 44556</p>
+              {teacherPhone ? (
+                <p className="text-xs font-mono font-bold text-slate-700 mt-0.5">
+                  {teacherPhone}
+                </p>
+              ) : (
+                <p className="text-[11px] text-slate-400 italic mt-0.5">
+                  {language === 'en' ? 'Not assigned by school' : 'स्कूल द्वारा नंबर दर्ज नहीं'}
+                </p>
+              )}
             </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={openWhatsAppToSchool}
-                className="p-2 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition cursor-pointer"
-                title="WhatsApp"
-              >
-                <MessageCircle className="w-4 h-4" />
-              </button>
-              <a
-                href="tel:+919833344556"
-                className="p-2 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition"
-                title={t('call')}
-              >
-                <Phone className="w-4 h-4" />
-              </a>
-            </div>
+
+            {teacherPhone ? (
+              <div className="flex items-center gap-2 pt-2 border-t border-slate-200/80">
+                <button
+                  onClick={() => openWhatsAppTo(teacherPhone, 'कक्षा शिक्षक', teacherName)}
+                  className="flex-1 py-1.5 px-2 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 font-bold text-xs flex items-center justify-center gap-1.5 transition active:scale-95 touch-manipulation cursor-pointer"
+                  title="WhatsApp"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" />
+                  <span>WhatsApp</span>
+                </button>
+                <a
+                  href={`tel:${teacherPhone.replace(/[^0-9+]/g, '')}`}
+                  className="flex-1 py-1.5 px-2 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 font-bold text-xs flex items-center justify-center gap-1.5 transition active:scale-95"
+                  title="Call"
+                >
+                  <Phone className="w-3.5 h-3.5" />
+                  <span>{language === 'en' ? 'Call' : 'कॉल'}</span>
+                </a>
+              </div>
+            ) : (
+              <div className="pt-2 border-t border-slate-200/80 text-[10px] text-slate-400 italic text-center">
+                {language === 'en' ? 'Teacher not registered yet' : 'शिक्षक अभी पंजीकृत नहीं'}
+              </div>
+            )}
           </div>
 
-          <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between">
+          {/* Card 3: Gate Guard */}
+          <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col justify-between gap-3">
             <div>
-              <p className="text-xs font-bold text-slate-900">
-                {language === 'en' ? 'Gate Guard' : 'गेट गार्ड'}
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                  {language === 'en' ? 'Gate Guard' : 'गेट सुरक्षा गार्ड'}
+                </span>
+                {guardPhone && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" title="सक्रिय संपर्क" />
+                )}
+              </div>
+              <p className="text-xs font-bold text-slate-900 mt-2 truncate">
+                {gateGuardUser ? guardName : (language === 'en' ? 'Gate Guard' : 'गेट सुरक्षा गार्ड')}
               </p>
-              <p className="text-[10px] text-slate-500">+91 98222 33445</p>
+              {guardPhone ? (
+                <p className="text-xs font-mono font-bold text-slate-700 mt-0.5">
+                  {guardPhone}
+                </p>
+              ) : (
+                <p className="text-[11px] text-slate-400 italic mt-0.5">
+                  {language === 'en' ? 'Not assigned by school' : 'स्कूल द्वारा नंबर दर्ज नहीं'}
+                </p>
+              )}
             </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={openWhatsAppToSchool}
-                className="p-2 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition cursor-pointer"
-                title="WhatsApp"
-              >
-                <MessageCircle className="w-4 h-4" />
-              </button>
-              <a
-                href="tel:+919822233445"
-                className="p-2 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition"
-                title={t('call')}
-              >
-                <Phone className="w-4 h-4" />
-              </a>
-            </div>
+
+            {guardPhone ? (
+              <div className="flex items-center gap-2 pt-2 border-t border-slate-200/80">
+                <button
+                  onClick={() => openWhatsAppTo(guardPhone, 'गेट गार्ड', guardName)}
+                  className="flex-1 py-1.5 px-2 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 font-bold text-xs flex items-center justify-center gap-1.5 transition active:scale-95 touch-manipulation cursor-pointer"
+                  title="WhatsApp"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" />
+                  <span>WhatsApp</span>
+                </button>
+                <a
+                  href={`tel:${guardPhone.replace(/[^0-9+]/g, '')}`}
+                  className="flex-1 py-1.5 px-2 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 font-bold text-xs flex items-center justify-center gap-1.5 transition active:scale-95"
+                  title="Call"
+                >
+                  <Phone className="w-3.5 h-3.5" />
+                  <span>{language === 'en' ? 'Call' : 'कॉल'}</span>
+                </a>
+              </div>
+            ) : (
+              <div className="pt-2 border-t border-slate-200/80 text-[10px] text-slate-400 italic text-center">
+                {language === 'en' ? 'Guard not registered yet' : 'गार्ड अभी पंजीकृत नहीं'}
+              </div>
+            )}
           </div>
         </div>
       </div>

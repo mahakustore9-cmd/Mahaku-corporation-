@@ -193,7 +193,7 @@ export const StudentIdCardModal: React.FC<StudentIdCardModalProps> = ({ student,
               School Helpline:
             </span>
             <span className="font-bold text-slate-900 block mt-0.5 truncate font-mono text-[10px]">
-              {school?.phone || '+91 98765 43210'}
+              {school?.phone || student.emergencyPhone || student.parentPhone}
             </span>
           </div>
           <div className="bg-rose-50 p-1.5 rounded-xl border border-rose-200 text-rose-950">
@@ -310,9 +310,9 @@ export const StudentIdCardModal: React.FC<StudentIdCardModalProps> = ({ student,
           <div className="mt-3 p-2 bg-blue-50 rounded-xl border border-blue-200 text-[9.5px]">
             <p className="font-bold text-blue-900">स्कूल पता:</p>
             <p className="text-slate-600 mt-0.5 truncate">
-              {school?.address || 'Sector 14, Rohini, New Delhi - 110085'}
+              {school?.address || student.address || ''}
             </p>
-            <p className="mt-0.5 font-bold text-blue-900">फोन: {school?.phone || '+91 98765 43210'}</p>
+            <p className="mt-0.5 font-bold text-blue-900">फोन: {school?.phone || student.emergencyPhone || student.parentPhone}</p>
           </div>
         </div>
 
