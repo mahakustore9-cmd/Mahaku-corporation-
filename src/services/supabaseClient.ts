@@ -572,7 +572,7 @@ ALTER TABLE public.students DROP COLUMN IF EXISTS photo_data_url;
 CREATE INDEX IF NOT EXISTS idx_students_qr ON public.students(qr_token);
 CREATE INDEX IF NOT EXISTS idx_students_school ON public.students(school_id);
 
--- 4. DAILY SCANS TABLE (5-Step Daily Student Journey)
+-- 4. DAILY SCANS TABLE (5-Step Daily Student Journey: Exactly 1 row per student per day per step)
 CREATE TABLE IF NOT EXISTS public.daily_scans (
     id VARCHAR(64) PRIMARY KEY,
     student_id VARCHAR(64) NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
@@ -583,9 +583,11 @@ CREATE TABLE IF NOT EXISTS public.daily_scans (
     scanned_by VARCHAR(64),
     scanned_by_name VARCHAR(80),
     scanned_by_role VARCHAR(20),
-    notes VARCHAR(150)
+    notes VARCHAR(150),
+    CONSTRAINT uq_scan_student_date_step UNIQUE (student_id, scan_date, step)
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS uq_daily_scans_student_date_step ON public.daily_scans(student_id, scan_date, step);
 CREATE INDEX IF NOT EXISTS idx_scans_date_student ON public.daily_scans(scan_date, student_id);
 CREATE INDEX IF NOT EXISTS idx_scans_school ON public.daily_scans(school_id);
 

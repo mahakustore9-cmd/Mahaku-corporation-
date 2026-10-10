@@ -54,6 +54,11 @@ export default function App() {
     }
   }, [currentUser?.role]);
 
+  // Initialize Supabase sync and realtime scans listener on application mount
+  useEffect(() => {
+    dbStore.initSupabaseSync();
+  }, []);
+
   // Initialize sound unlock on any user tap/click
   useEffect(() => {
     const handleFirstInteraction = () => {

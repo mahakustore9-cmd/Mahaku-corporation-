@@ -123,6 +123,13 @@ export const BottomNav: React.FC<BottomNavProps> = ({
             icon: <Compass className="w-5 h-5" />,
           },
           {
+            id: 'scan-qr-action',
+            labelHi: 'QR स्कैनर',
+            labelEn: 'Scan QR',
+            icon: <Camera className="w-5 h-5 text-emerald-600" />,
+            isAction: true,
+          },
+          {
             id: 'id-card-action',
             labelHi: 'आईडी कार्ड',
             labelEn: 'Digital ID',

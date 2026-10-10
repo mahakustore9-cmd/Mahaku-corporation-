@@ -461,7 +461,10 @@ export const SchoolAdminDashboard: React.FC<SchoolAdminDashboardProps> = ({
     else if (!journey.steps[3]) nextStep = 3;
     else if (!journey.steps[4]) nextStep = 4;
     else if (!journey.steps[5]) nextStep = 5;
-    else nextStep = 2;
+    else {
+      showToast('छात्र के आज के सभी 5 चरण पहले ही पूरे हो चुके हैं! दोहराव (Double Scan) की अनुमति नहीं है।');
+      return;
+    }
 
     const scannerUser: User = {
       ...currentUser,
@@ -479,21 +482,26 @@ export const SchoolAdminDashboard: React.FC<SchoolAdminDashboardProps> = ({
           : 'GUARD',
     };
 
-    const res = await dbStore.recordScan(
-      std.id,
-      nextStep,
-      scannerUser,
-      `Simulated Admin Scan - Step ${nextStep}`
-    );
+    try {
+      const res = await dbStore.recordScan(
+        std.id,
+        nextStep,
+        scannerUser,
+        `Admin Manual Scan - Step ${nextStep}`
+      );
 
-    setRecentLiveScan({
-      student: std,
-      step: nextStep,
-      time: new Date().toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      status: JOURNEY_STEPS[nextStep].titleHi,
-    });
-    refreshAll();
-    showToast(res.messageHi);
+      setRecentLiveScan({
+        student: std,
+        step: nextStep,
+        time: new Date().toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        status: JOURNEY_STEPS[nextStep].titleHi,
+      });
+      refreshAll();
+      showToast(res.messageHi);
+    } catch (err: unknown) {
+      const error = err as Error;
+      showToast(error.message);
+    }
   };
 
   const allClasses = Array.from(new Set(students.map((s) => s.className))).filter(Boolean);

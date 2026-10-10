@@ -11,6 +11,11 @@ import {
   IdCard,
   ShieldAlert,
   AlertCircle,
+  Camera,
+  Bell,
+  BellRing,
+  Check,
+  Sparkles,
 } from 'lucide-react';
 import { Student, User, StepType, JOURNEY_STEPS } from '../../types';
 import { dbStore, getTodayDateString } from '../../services/dbStore';
@@ -18,9 +23,12 @@ import {
   speakAlertText,
   unlockAudio,
   NOTIFICATION_EVENT,
+  enableVoiceAndNotifications,
+  isNotificationGranted,
 } from '../../services/soundService';
-import { getStudentPhotoSrc } from '../../services/supabaseClient';
+import { getStudentPhotoSrc, getSupabase } from '../../services/supabaseClient';
 import { StudentIdCardModal } from '../schooladmin/StudentIdCardModal';
+import { QRScannerModal } from '../common/QRScannerModal';
 import { useLanguage } from '../../services/languageContext';
 
 interface ParentDashboardProps {
@@ -59,10 +67,31 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
   const today = getTodayDateString();
 
+  // QR Scanner & Alert states
+  const [showQRScanner, setShowQRScanner] = useState(false);
+  const [scannerTargetStep, setScannerTargetStep] = useState<StepType | undefined>(undefined);
+  const [scanSuccessToast, setScanSuccessToast] = useState<string | null>(null);
+  const [alertsEnabled, setAlertsEnabled] = useState<boolean>(() => {
+    try {
+      return (
+        isNotificationGranted() ||
+        localStorage.getItem('suraksha_alerts_enabled_v1') === 'true'
+      );
+    } catch {
+      return false;
+    }
+  });
+  const [isEnablingAlerts, setIsEnablingAlerts] = useState(false);
+
   // Handle external BottomNav actions
   useEffect(() => {
     if (navAction === 'id-card-action') {
       setShowIdCardModal(true);
+      if (onClearNavAction) onClearNavAction();
+    } else if (navAction === 'scan-qr-action') {
+      unlockAudio();
+      setScannerTargetStep(undefined);
+      setShowQRScanner(true);
       if (onClearNavAction) onClearNavAction();
     }
   }, [navAction, onClearNavAction]);
@@ -89,7 +118,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
     }
   }, [student]);
 
-  // Real-time Event Listener for Voice Notification
+  // Real-time Event Listener for Voice Notification (within tab or local broadcast)
   useEffect(() => {
     const handleScanEvent = (e: Event) => {
       const customEvent = e as CustomEvent<{
@@ -120,6 +149,75 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
     };
   }, [student, language]);
 
+  // Active Cross-Device Supabase Sync (Every 5 seconds)
+  // Ensures voice alert sounds on parent's mobile when Guard/Teacher scans from school!
+  useEffect(() => {
+    if (!student) return;
+
+    let isMounted = true;
+    const interval = setInterval(async () => {
+      try {
+        const supabase = getSupabase();
+        if (!supabase) return;
+
+        const { data, error } = await supabase
+          .from('daily_scans')
+          .select('*')
+          .eq('student_id', student.id)
+          .eq('scan_date', today);
+
+        if (!error && Array.isArray(data) && isMounted) {
+          const localScans = dbStore.getScans();
+          let newScanDetected: any = null;
+
+          for (const row of data) {
+            const alreadyInLocal = localScans.some(
+              (s) =>
+                s.id === row.id ||
+                (s.studentId === row.student_id && s.scanDate === row.scan_date && s.step === row.step)
+            );
+            if (!alreadyInLocal) {
+              newScanDetected = row;
+              localScans.push({
+                id: row.id,
+                studentId: row.student_id,
+                schoolId: row.school_id,
+                scanDate: row.scan_date,
+                step: row.step,
+                scannedAt: row.scanned_at,
+                scannedBy: row.scanned_by || '',
+                scannedByName: row.scanned_by_name || '',
+                scannedByRole: row.scanned_by_role || 'GUARD',
+                notes: row.notes || '',
+              });
+            }
+          }
+
+          if (newScanDetected) {
+            localStorage.setItem('suraksha_scans_v4', JSON.stringify(localScans));
+            refreshHistory();
+            const stepInfo = JOURNEY_STEPS[newScanDetected.step as StepType];
+            const msg = stepInfo
+              ? stepInfo.voiceTemplateHi(student.name)
+              : `सुरक्षा अलर्ट: चरण ${newScanDetected.step} दर्ज हुआ`;
+            setLastVoiceAlert(msg);
+            speakAlertText(msg, language === 'en' ? 'en' : 'hi');
+            if (newScanDetected.step === 5) {
+              confetti({ particleCount: 140, spread: 85, origin: { y: 0.6 } });
+            }
+          }
+        }
+      } catch {
+        // silent polling catch
+      }
+    }, 5000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [student, today, language]);
+
   if (!student) {
     return (
       <div className="max-w-md mx-auto my-12 p-8 bg-white border border-slate-200 rounded-3xl text-center text-slate-700 shadow-sm">
@@ -146,6 +244,62 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
     a.click();
   };
 
+  const handleOpenGeneralQRScanner = () => {
+    unlockAudio();
+    setActionError(null);
+    setScannerTargetStep(undefined);
+    setShowQRScanner(true);
+  };
+
+  const handleOpenStepQRScanner = (stepNum: StepType) => {
+    unlockAudio();
+    setActionError(null);
+    if (stepNum === 5 && !todayJourney.steps[4]) {
+      setActionError('चरण 5 (सकुशल घर वापसी) से पहले चरण 4 (स्कूल से प्रस्थान) पूरा होना अनिवार्य है!');
+      setTimeout(() => setActionError(null), 4000);
+      return;
+    }
+    setScannerTargetStep(stepNum);
+    setShowQRScanner(true);
+  };
+
+  const handleQRScanSuccess = async (scannedStudent: Student, notes?: string, resolvedStep?: StepType) => {
+    unlockAudio();
+    setActionError(null);
+    const finalStep = resolvedStep || scannerTargetStep || 1;
+    try {
+      const result = await dbStore.recordScan(
+        scannedStudent.id,
+        finalStep,
+        currentUser,
+        notes || (finalStep === 1 ? 'Parent Home Exit QR Scan' : 'Parent Home Arrival Safe QR Scan')
+      );
+      setScanSuccessToast(`चरण ${finalStep}: ${JOURNEY_STEPS[finalStep].titleHi} स्कैन सफल!`);
+      setLastVoiceAlert(result.messageHi);
+      refreshHistory();
+      if (finalStep === 5) {
+        confetti({ particleCount: 150, spread: 90, origin: { y: 0.6 } });
+      }
+      setTimeout(() => setScanSuccessToast(null), 4000);
+    } catch (err: unknown) {
+      const error = err as Error;
+      setActionError(error.message);
+      setTimeout(() => setActionError(null), 5000);
+    }
+  };
+
+  const handleEnableAlerts = async () => {
+    setIsEnablingAlerts(true);
+    try {
+      const res = await enableVoiceAndNotifications();
+      if (res.audioUnlocked || res.notificationGranted) {
+        setAlertsEnabled(true);
+      }
+    } finally {
+      setIsEnablingAlerts(false);
+    }
+  };
+
   const handleParentStepAction = async (step: StepType) => {
     unlockAudio();
     setActionError(null);
@@ -156,11 +310,13 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
         currentUser,
         step === 1 ? 'Parent Home Exit Confirmation' : 'Parent Home Arrival Safe Confirmation'
       );
+      setScanSuccessToast(`चरण ${step}: ${JOURNEY_STEPS[step].titleHi} सफलतापूर्वक दर्ज!`);
       setLastVoiceAlert(result.messageHi);
       refreshHistory();
       if (step === 5) {
         confetti({ particleCount: 150, spread: 90, origin: { y: 0.6 } });
       }
+      setTimeout(() => setScanSuccessToast(null), 4000);
     } catch (err: unknown) {
       const error = err as Error;
       setActionError(error.message);
@@ -214,6 +370,85 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
         </div>
       )}
 
+      {/* Scan Success Toast */}
+      {scanSuccessToast && (
+        <div className="p-3.5 rounded-2xl bg-emerald-600 text-white font-bold text-xs shadow-lg flex items-center gap-2.5 animate-in fade-in slide-in-from-top-2">
+          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-200" />
+          <span>{scanSuccessToast}</span>
+        </div>
+      )}
+
+      {/* Voice Alert & Notification Status Banner (User Requirement) */}
+      <div
+        className={`rounded-3xl p-4 sm:p-5 border transition shadow-xs ${
+          alertsEnabled
+            ? 'bg-gradient-to-r from-emerald-50 to-teal-50 border-emerald-300 text-emerald-950'
+            : 'bg-gradient-to-r from-amber-50 to-orange-50 border-amber-300 text-amber-950 ring-2 ring-amber-400/40'
+        }`}
+      >
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div
+              className={`p-3 rounded-2xl shrink-0 ${
+                alertsEnabled
+                  ? 'bg-emerald-600 text-white shadow-md'
+                  : 'bg-amber-500 text-slate-950 animate-bounce'
+              }`}
+            >
+              {alertsEnabled ? <Check className="w-5 h-5 stroke-[2.5]" /> : <BellRing className="w-5 h-5" />}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="font-black text-sm sm:text-base">
+                  {alertsEnabled
+                    ? (language === 'en' ? 'Live Voice Alerts Active' : 'लाइव वॉइस व नोटिफिकेशन अलर्ट चालू हैं')
+                    : (language === 'en' ? 'Turn ON Mobile Voice & Push Alerts' : 'मोबाइल पर लाइव वॉइस अलर्ट और नोटिफिकेशन चालू करें')}
+                </h3>
+                {alertsEnabled && (
+                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full border border-emerald-200">
+                    {language === 'en' ? 'ACTIVE' : 'सक्रिय'}
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-600 mt-0.5">
+                {alertsEnabled
+                  ? (language === 'en'
+                      ? 'Your phone will automatically chime and speak aloud in Hindi on every scan update.'
+                      : 'स्कूल गेट आगमन, कक्षा हाजिरी व छुट्टी पर आपका फोन बोलकर हिंदी में लाइव सूचना देगा।')
+                  : (language === 'en'
+                      ? 'Tap button below to permit audio and push notifications so your phone speaks alerts.'
+                      : 'कृपया नीचे दबाकर आवाज़ व नोटिफिकेशन अनुमति चालू करें जिससे हर स्कैन पर मोबाइल में आवाज़ आए।')}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+            {!alertsEnabled ? (
+              <button
+                onClick={handleEnableAlerts}
+                disabled={isEnablingAlerts}
+                className="w-full sm:w-auto py-2.5 px-5 rounded-2xl bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-md transition touch-manipulation cursor-pointer"
+              >
+                <BellRing className="w-4 h-4 text-slate-950" />
+                <span>
+                  {isEnablingAlerts
+                    ? 'चालू हो रहा है...'
+                    : (language === 'en' ? 'Enable Voice Alerts' : '📢 अलर्ट चालू करें')}
+                </span>
+              </button>
+            ) : (
+              <button
+                onClick={handleTestVoice}
+                className="py-2 px-3.5 rounded-xl bg-white/90 hover:bg-white text-emerald-800 border border-emerald-300 font-bold text-xs flex items-center gap-1.5 shadow-xs transition touch-manipulation cursor-pointer"
+              >
+                <Volume2 className="w-4 h-4 text-emerald-600" />
+                <span>{language === 'en' ? 'Test Alert' : '🔊 आवाज़ टेस्ट करें'}</span>
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Action Error Banner */}
       {actionError && (
         <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold flex items-center gap-2">
@@ -263,10 +498,18 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 self-stretch sm:self-auto">
+          <div className="flex items-center gap-2 self-stretch sm:self-auto flex-wrap">
+            <button
+              onClick={handleOpenGeneralQRScanner}
+              className="flex-1 sm:flex-initial py-2.5 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition active:scale-95 touch-manipulation cursor-pointer"
+              title="QR स्कैनर खोलें"
+            >
+              <Camera className="w-4 h-4" />
+              <span>{language === 'en' ? 'QR Scanner' : 'QR स्कैनर'}</span>
+            </button>
             <button
               onClick={() => setShowIdCardModal(true)}
-              className="flex-1 sm:flex-initial py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition active:scale-95 touch-manipulation cursor-pointer"
+              className="flex-1 sm:flex-initial py-2.5 px-3.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition active:scale-95 touch-manipulation cursor-pointer"
             >
               <IdCard className="w-4 h-4" />
               <span>{t('tab_id_card')}</span>
@@ -336,13 +579,22 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                 <span>{language === 'en' ? 'Departed (Confirmed)' : 'रवाना हो चुका (Done)'}</span>
               </div>
             ) : (
-              <button
-                onClick={() => handleParentStepAction(1)}
-                className="w-full py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-sm transition active:scale-95 touch-manipulation cursor-pointer"
-              >
-                <Home className="w-4 h-4" />
-                <span>{language === 'en' ? 'Child Left Home (Tap)' : 'बच्चा स्कूल रवाना हुआ (दबाएं)'}</span>
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => handleOpenStepQRScanner(1)}
+                  className="py-2.5 px-3 rounded-2xl bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition touch-manipulation cursor-pointer"
+                >
+                  <Camera className="w-4 h-4 text-emerald-400" />
+                  <span>QR स्कैन</span>
+                </button>
+                <button
+                  onClick={() => handleParentStepAction(1)}
+                  className="py-2.5 px-3 rounded-2xl bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-sm transition touch-manipulation cursor-pointer"
+                >
+                  <Home className="w-4 h-4" />
+                  <span>1-टैप प्रस्थान</span>
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -386,14 +638,26 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                 <span>{language === 'en' ? 'Safely Arrived Home' : 'घर पहुँच गया (Completed)'}</span>
               </div>
             ) : (
-              <button
-                onClick={() => handleParentStepAction(5)}
-                disabled={!todayJourney.steps[4]}
-                className="w-full py-3 rounded-2xl bg-teal-600 hover:bg-teal-700 disabled:opacity-40 text-white font-black text-xs flex items-center justify-center gap-2 shadow-sm transition active:scale-95 touch-manipulation cursor-pointer"
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                <span>{language === 'en' ? 'Child Reached Home (Confirm)' : 'बच्चा सकुशल घर आ गया (पुष्टि करें)'}</span>
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => handleOpenStepQRScanner(5)}
+                  disabled={!todayJourney.steps[4]}
+                  className="py-2.5 px-3 rounded-2xl bg-slate-900 hover:bg-slate-800 disabled:opacity-40 active:scale-95 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition touch-manipulation cursor-pointer"
+                  title={!todayJourney.steps[4] ? 'चरण 4 पूरा होने के बाद ही स्कैन होगा' : 'QR स्कैन करें'}
+                >
+                  <Camera className="w-4 h-4 text-teal-400" />
+                  <span>QR स्कैन</span>
+                </button>
+                <button
+                  onClick={() => handleParentStepAction(5)}
+                  disabled={!todayJourney.steps[4]}
+                  className="py-2.5 px-3 rounded-2xl bg-teal-600 hover:bg-teal-700 disabled:opacity-40 active:scale-95 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow-sm transition touch-manipulation cursor-pointer"
+                  title={!todayJourney.steps[4] ? 'चरण 4 पूरा होने के बाद ही पुष्टि होगी' : '1-टैप वापसी'}
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>1-टैप वापसी</span>
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -669,6 +933,18 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
         <StudentIdCardModal
           student={student}
           onClose={() => setShowIdCardModal(false)}
+        />
+      )}
+
+      {/* QR Scanner Modal for Parent */}
+      {showQRScanner && (
+        <QRScannerModal
+          isOpen={showQRScanner}
+          onClose={() => setShowQRScanner(false)}
+          step={scannerTargetStep}
+          targetStudentId={student.id}
+          parentMode={true}
+          onScanSuccess={handleQRScanSuccess}
         />
       )}
     </div>

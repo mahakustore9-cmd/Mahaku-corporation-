@@ -4,10 +4,20 @@
  */
 
 let audioCtx: AudioContext | null = null;
+let cachedVoices: SpeechSynthesisVoice[] = [];
 
-// Initialize or resume AudioContext on user interaction to bypass autoplay restrictions
-export function unlockAudio(): void {
+// Pre-cache voices when available
+if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+  cachedVoices = window.speechSynthesis.getVoices();
+  window.speechSynthesis.onvoiceschanged = () => {
+    cachedVoices = window.speechSynthesis.getVoices();
+  };
+}
+
+// Initialize or resume AudioContext on user interaction to bypass mobile autoplay restrictions
+export function unlockAudio(): boolean {
   try {
+    if (typeof window === 'undefined') return false;
     if (!audioCtx) {
       const AudioContextClass =
         window.AudioContext ||
@@ -16,12 +26,98 @@ export function unlockAudio(): void {
         audioCtx = new AudioContextClass();
       }
     }
-    if (audioCtx && audioCtx.state === 'suspended') {
-      audioCtx.resume();
+    if (audioCtx) {
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+      // Play a tiny inaudible buffer to permanently prime iOS/Android audio pipeline
+      try {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        gain.gain.value = 0.0001;
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(0);
+        osc.stop(audioCtx.currentTime + 0.05);
+      } catch {
+        // ignore
+      }
+      return true;
     }
+    return false;
   } catch (err) {
     console.warn('AudioContext initialization note:', err);
+    return false;
   }
+}
+
+/**
+ * Checks if browser push/system notification is granted
+ */
+export function isNotificationGranted(): boolean {
+  if (typeof window === 'undefined' || !('Notification' in window)) return false;
+  return Notification.permission === 'granted';
+}
+
+/**
+ * Requests browser push/system notification permission
+ */
+export async function requestNotificationPermission(): Promise<NotificationPermission> {
+  if (typeof window === 'undefined' || !('Notification' in window)) {
+    return 'denied';
+  }
+  try {
+    const permission = await Notification.requestPermission();
+    return permission;
+  } catch (e) {
+    console.warn('Notification permission error:', e);
+    return 'denied';
+  }
+}
+
+/**
+ * Explicit one-tap enablement for parents on mobile devices
+ */
+export async function enableVoiceAndNotifications(): Promise<{
+  notificationGranted: boolean;
+  audioUnlocked: boolean;
+}> {
+  const audioUnlocked = unlockAudio();
+  let notifPermission: NotificationPermission = 'default';
+
+  if (typeof window !== 'undefined' && 'Notification' in window) {
+    try {
+      notifPermission = await Notification.requestPermission();
+    } catch {
+      notifPermission = 'denied';
+    }
+  }
+
+  // Play confirmation chime
+  await playAlertChime();
+
+  // Voice confirmation in Hindi
+  const confirmText =
+    notifPermission === 'granted'
+      ? 'सुरक्षा अलर्ट और वॉइस नोटिफिकेशन सक्रिय हो गया है।'
+      : 'वॉइस अलर्ट सक्रिय हो गया है।';
+
+  await speakAlertText(confirmText, 'hi');
+
+  if (notifPermission === 'granted') {
+    await showSystemNotification('सुरक्षा अलर्ट सक्रिय', 'लाइव वॉइस व सुरक्षा सूचनाएं अब आपके फोन पर बजेंगी।');
+  }
+
+  try {
+    localStorage.setItem('suraksha_alerts_enabled_v1', 'true');
+  } catch {
+    // ignore
+  }
+
+  return {
+    notificationGranted: notifPermission === 'granted',
+    audioUnlocked,
+  };
 }
 
 /**
@@ -89,38 +185,49 @@ export async function speakAlertText(text: string, lang: 'hi' | 'en' = 'hi'): Pr
 
   // 3. Web Speech API SpeechSynthesis
   if ('speechSynthesis' in window) {
-    window.speechSynthesis.cancel(); // clear previous queued utterances
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 0.94; // Measured rate for clarity
-    utterance.pitch = 1.02;
-    utterance.volume = 1.0;
+    try {
+      window.speechSynthesis.cancel(); // clear previous queued utterances
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 0.94; // Measured rate for clarity
+      utterance.pitch = 1.02;
+      utterance.volume = 1.0;
 
-    const voices = window.speechSynthesis.getVoices();
-    if (lang === 'hi') {
-      const hindiVoice = voices.find(
-        (v) => v.lang.startsWith('hi') || v.lang.includes('hi-IN') || v.name.toLowerCase().includes('hindi')
-      );
-      if (hindiVoice) {
-        utterance.voice = hindiVoice;
-        utterance.lang = hindiVoice.lang;
+      const voices = cachedVoices.length > 0 ? cachedVoices : window.speechSynthesis.getVoices();
+      if (lang === 'hi') {
+        const hindiVoice = voices.find(
+          (v) => v.lang.startsWith('hi') || v.lang.includes('hi-IN') || v.name.toLowerCase().includes('hindi')
+        );
+        if (hindiVoice) {
+          utterance.voice = hindiVoice;
+          utterance.lang = hindiVoice.lang;
+        } else {
+          const indianVoice = voices.find((v) => v.lang.includes('en-IN') || v.name.toLowerCase().includes('india'));
+          if (indianVoice) utterance.voice = indianVoice;
+          utterance.lang = 'hi-IN';
+        }
       } else {
-        const indianVoice = voices.find((v) => v.lang.includes('en-IN') || v.name.toLowerCase().includes('india'));
-        if (indianVoice) utterance.voice = indianVoice;
-        utterance.lang = 'hi-IN';
+        const enVoice = voices.find(
+          (v) => v.lang.startsWith('en') && (v.lang.includes('IN') || v.lang.includes('US') || v.lang.includes('GB'))
+        );
+        if (enVoice) {
+          utterance.voice = enVoice;
+          utterance.lang = enVoice.lang;
+        } else {
+          utterance.lang = 'en-US';
+        }
       }
-    } else {
-      const enVoice = voices.find(
-        (v) => v.lang.startsWith('en') && (v.lang.includes('IN') || v.lang.includes('US') || v.lang.includes('GB'))
-      );
-      if (enVoice) {
-        utterance.voice = enVoice;
-        utterance.lang = enVoice.lang;
-      } else {
-        utterance.lang = 'en-US';
-      }
+
+      // Small 60ms timeout to avoid mobile speech cancellation bug
+      setTimeout(() => {
+        try {
+          window.speechSynthesis.speak(utterance);
+        } catch {
+          // ignore
+        }
+      }, 60);
+    } catch {
+      // speech synthesis error fallback
     }
-
-    window.speechSynthesis.speak(utterance);
   }
 }
 

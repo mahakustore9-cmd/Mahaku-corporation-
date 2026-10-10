@@ -866,6 +866,92 @@ export class DBStore {
     return scans;
   }
 
+  /**
+   * Validates if a student can be scanned for a given step today.
+   * Enforces:
+   * 1. No double scan (a step can only be recorded once per day).
+   * 2. Strict step-by-step sequence (step N requires step N-1 to be complete).
+   */
+  public validateStepForStudent(
+    studentId: string,
+    step: StepType,
+    date: string = getTodayDateString()
+  ): { valid: boolean; error?: string } {
+    const student = this.getStudentById(studentId);
+    if (!student) {
+      return { valid: false, error: 'छात्र रिकॉर्ड नहीं मिला (Student record not found)।' };
+    }
+
+    const scans = this.getScans().filter(
+      (s) => s.studentId === studentId && s.scanDate === date
+    );
+
+    // 1. Double scan check for the exact step
+    const alreadyDone = scans.find((s) => s.step === step);
+    if (alreadyDone) {
+      const timeStr = new Date(alreadyDone.scannedAt).toLocaleTimeString('hi-IN', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      return {
+        valid: false,
+        error: `चरण ${step} (${JOURNEY_STEPS[step].titleHi}) आज पहले ही ${timeStr} पर दर्ज हो चुका है! दोहराव (Double Scan) की अनुमति नहीं है।`,
+      };
+    }
+
+    // 2. Strict sequence check: All steps prior to this step must already be done
+    if (step > 1) {
+      for (let prev = 1; prev < step; prev++) {
+        const prevStep = prev as StepType;
+        const prevDone = scans.some((s) => s.step === prevStep);
+        if (!prevDone) {
+          return {
+            valid: false,
+            error: `क्रमबद्ध नियम: चरण ${step} (${JOURNEY_STEPS[step].titleHi}) से पहले चरण ${prevStep} (${JOURNEY_STEPS[prevStep].titleHi}) का पूरा होना अनिवार्य है!`,
+          };
+        }
+      }
+    }
+
+    return { valid: true };
+  }
+
+  /**
+   * Calculates the exact next pending step for a student today.
+   */
+  public getNextStepForStudent(
+    studentId: string,
+    date: string = getTodayDateString()
+  ): {
+    nextStep: StepType | null;
+    completedSteps: StepType[];
+    isComplete: boolean;
+  } {
+    const scans = this.getScans().filter(
+      (s) => s.studentId === studentId && s.scanDate === date
+    );
+    const completedSteps: StepType[] = [];
+    for (let s = 1; s <= 5; s++) {
+      if (scans.some((scan) => scan.step === s)) {
+        completedSteps.push(s as StepType);
+      }
+    }
+
+    let nextStep: StepType | null = null;
+    for (let s = 1; s <= 5; s++) {
+      if (!completedSteps.includes(s as StepType)) {
+        nextStep = s as StepType;
+        break;
+      }
+    }
+
+    return {
+      nextStep,
+      completedSteps,
+      isComplete: completedSteps.length === 5,
+    };
+  }
+
   public async recordScan(
     studentId: string,
     step: StepType,
@@ -878,14 +964,14 @@ export class DBStore {
     }
 
     const today = getTodayDateString();
-    const existingScans = this.getScans();
 
-    const alreadyDone = existingScans.find(
-      (s) => s.studentId === studentId && s.scanDate === today && s.step === step
-    );
-    if (alreadyDone) {
-      throw new Error(`चरण ${step} (${JOURNEY_STEPS[step].titleHi}) आज पहले ही दर्ज हो चुका है!`);
+    // Enforce strict double scan protection and sequential step-by-step order
+    const validation = this.validateStepForStudent(studentId, step, today);
+    if (!validation.valid) {
+      throw new Error(validation.error || 'स्कैन सत्यापन विफल हुआ');
     }
+
+    const existingScans = this.getScans();
 
     const newScan: DailyScan = {
       id: `scan_${Date.now()}`,
@@ -907,18 +993,21 @@ export class DBStore {
     if (supabase) {
       supabase
         .from('daily_scans')
-        .insert({
-          id: newScan.id,
-          student_id: newScan.studentId,
-          school_id: newScan.schoolId,
-          scan_date: newScan.scanDate,
-          step: newScan.step,
-          scanned_at: newScan.scannedAt,
-          scanned_by: newScan.scannedBy,
-          scanned_by_name: newScan.scannedByName,
-          scanned_by_role: newScan.scannedByRole,
-          notes: newScan.notes,
-        })
+        .upsert(
+          {
+            id: newScan.id,
+            student_id: newScan.studentId,
+            school_id: newScan.schoolId,
+            scan_date: newScan.scanDate,
+            step: newScan.step,
+            scanned_at: newScan.scannedAt,
+            scanned_by: newScan.scannedBy,
+            scanned_by_name: newScan.scannedByName,
+            scanned_by_role: newScan.scannedByRole,
+            notes: newScan.notes,
+          },
+          { onConflict: 'student_id,scan_date,step' }
+        )
         .then(({ error }) => {
           if (error) console.warn('Supabase recordScan error:', error);
         });

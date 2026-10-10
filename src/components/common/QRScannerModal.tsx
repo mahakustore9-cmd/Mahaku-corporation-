@@ -8,10 +8,12 @@ import { playAlertChime } from '../../services/soundService';
 interface QRScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
-  step: StepType;
-  onScanSuccess: (student: Student, notes?: string) => void;
-  allowedClass?: string; // Optional filter for teacher
-  schoolId?: string;     // School isolation
+  step?: StepType; // Optional: If omitted, auto-detects student's next required step
+  onScanSuccess: (student: Student, notes?: string, resolvedStep?: StepType) => void;
+  allowedClass?: string;     // Optional filter for teacher
+  schoolId?: string;         // School isolation
+  targetStudentId?: string;  // Specific student lock (e.g. for Parent)
+  parentMode?: boolean;      // Parent specific scanning logic
 }
 
 export const QRScannerModal: React.FC<QRScannerModalProps> = ({
@@ -21,19 +23,22 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
   onScanSuccess,
   allowedClass,
   schoolId,
+  targetStudentId,
+  parentMode,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [scannedStudent, setScannedStudent] = useState<Student | null>(null);
+  const [activeResolvedStep, setActiveResolvedStep] = useState<StepType>(step || 1);
   const [scanMessage, setScanMessage] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
   const streamRef = useRef<MediaStream | null>(null);
   const animationFrameId = useRef<number | null>(null);
 
-  const stepDef = JOURNEY_STEPS[step];
+  const stepDef = step ? JOURNEY_STEPS[step] : JOURNEY_STEPS[activeResolvedStep];
 
   // Stop camera stream safely
   const stopCamera = () => {
@@ -51,31 +56,91 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
   const handleCodeFound = async (token: string) => {
     if (isProcessing) return;
     setIsProcessing(true);
-    await playAlertChime();
 
     const student = dbStore.getStudentByQR(token.trim());
-    if (student) {
-      if (schoolId && student.schoolId !== schoolId) {
-        setScanMessage('यह छात्र इस स्कूल का नहीं है!');
-        setIsProcessing(false);
-        return;
-      }
-      if (allowedClass && student.className !== allowedClass) {
-        setScanMessage(`यह छात्र ${student.className} का है, जबकि यह ${allowedClass} की कक्षा है।`);
-        setIsProcessing(false);
-        return;
-      }
-      setScannedStudent(student);
-      stopCamera();
-      setScanMessage(null);
-      setTimeout(() => {
-        onScanSuccess(student);
-        onClose();
-      }, 900);
-    } else {
+    if (!student) {
       setScanMessage(`अमान्य QR कोड: "${token}"`);
-      setIsProcessing(false);
+      setTimeout(() => setIsProcessing(false), 2000);
+      return;
     }
+
+    // Check specific target student (Parent Dashboard child isolation)
+    if (targetStudentId && student.id !== targetStudentId) {
+      setScanMessage(`यह QR कोड आपके पंजीकृत बच्चे का नहीं है! कृपया सही आईडी कार्ड स्कैन करें।`);
+      setTimeout(() => setIsProcessing(false), 2500);
+      return;
+    }
+
+    // Check school isolation
+    if (schoolId && student.schoolId !== schoolId) {
+      setScanMessage('यह छात्र इस स्कूल का नहीं है!');
+      setTimeout(() => setIsProcessing(false), 2500);
+      return;
+    }
+
+    // Check class filter (Teacher dashboard)
+    if (allowedClass && student.className !== allowedClass) {
+      setScanMessage(`यह छात्र ${student.className} का है, जबकि यह ${allowedClass} की कक्षा है।`);
+      setTimeout(() => setIsProcessing(false), 2500);
+      return;
+    }
+
+    // Resolve Step to record
+    let targetStep: StepType;
+
+    if (step) {
+      targetStep = step;
+    } else {
+      // Auto-detect next step for this student
+      const nextInfo = dbStore.getNextStepForStudent(student.id);
+      if (nextInfo.isComplete) {
+        setScanMessage(`✅ छात्र "${student.name}" के आज के सभी 5 चरण पूर्ण हो चुके हैं! दोहराव (Double Scan) की अनुमति नहीं है।`);
+        setTimeout(() => setIsProcessing(false), 3000);
+        return;
+      }
+
+      if (!nextInfo.nextStep) {
+        setScanMessage(`आज की यात्रा पूरी है। दोहराव नहीं हो सकता।`);
+        setTimeout(() => setIsProcessing(false), 2500);
+        return;
+      }
+
+      if (parentMode) {
+        if (nextInfo.nextStep === 1) {
+          targetStep = 1;
+        } else if (nextInfo.nextStep === 5) {
+          targetStep = 5;
+        } else {
+          setScanMessage(
+            `चरण 1 (घर से प्रस्थान) पहले ही पूर्ण है। चरण ${nextInfo.nextStep} (${JOURNEY_STEPS[nextInfo.nextStep].titleHi}) स्कूल गेट / कक्षा में स्कैन होगा।`
+          );
+          setTimeout(() => setIsProcessing(false), 3500);
+          return;
+        }
+      } else {
+        targetStep = nextInfo.nextStep;
+      }
+    }
+
+    // Validate step: double scan and strict step-by-step sequence check
+    const validation = dbStore.validateStepForStudent(student.id, targetStep);
+    if (!validation.valid) {
+      setScanMessage(validation.error || 'स्कैन सत्यापन विफल हुआ');
+      setTimeout(() => setIsProcessing(false), 3000);
+      return;
+    }
+
+    // Passed all validations!
+    setActiveResolvedStep(targetStep);
+    setScannedStudent(student);
+    setScanMessage(null);
+    await playAlertChime();
+    stopCamera();
+
+    setTimeout(() => {
+      onScanSuccess(student, undefined, targetStep);
+      onClose();
+    }, 900);
   };
 
   const tickScan = () => {
@@ -182,9 +247,19 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
             </div>
             <div>
               <h3 className="font-bold text-base text-white">
-                चरण {step}: {stepDef.titleHi}
+                {step
+                  ? `चरण ${step}: ${stepDef.titleHi}`
+                  : parentMode
+                  ? 'अभिभावक QR स्कैनर (Parent QR)'
+                  : 'लाइव सुरक्षा QR स्कैनर'}
               </h3>
-              <p className="text-xs text-slate-400">{stepDef.descHi}</p>
+              <p className="text-xs text-slate-400">
+                {step
+                  ? stepDef.descHi
+                  : parentMode
+                  ? 'अपने बच्चे के आईडी कार्ड का QR कोड स्कैन करें'
+                  : 'छात्र कार्ड का QR कोड स्कैन करें'}
+              </p>
             </div>
           </div>
           <button
