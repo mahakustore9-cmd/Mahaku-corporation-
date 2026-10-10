@@ -60,6 +60,13 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
   const fallbackStudent = myLinkedStudents[0] || null;
   const [student, setStudent] = useState<Student | null>(fallbackStudent);
+
+  // Sync student if initially null when database sync finishes
+  useEffect(() => {
+    if (!student && myLinkedStudents.length > 0) {
+      setStudent(myLinkedStudents[0]);
+    }
+  }, [myLinkedStudents, student]);
   const [selectedDayIndex, setSelectedDayIndex] = useState<number>(0); // 0 = Today, 1 = Yesterday, etc.
   const [showIdCardModal, setShowIdCardModal] = useState(false);
   const [lastVoiceAlert, setLastVoiceAlert] = useState<string | null>(null);

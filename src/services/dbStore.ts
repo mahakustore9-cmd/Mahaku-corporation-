@@ -283,8 +283,9 @@ export class DBStore {
       if (!studentsErr && Array.isArray(studentsData)) {
         const students: Student[] = studentsData.map((std) => {
           const photoKey = std.photo_key || 'std_photo.jpg';
+          const rawPhoto = std.photo_url || std.photo_data_url;
           const cleanPhotoUrl =
-            sanitizePhotoUrl(std.photo_url) || getStudentPhotoBucketUrl(photoKey);
+            sanitizePhotoUrl(rawPhoto) || getStudentPhotoBucketUrl(photoKey);
           return {
             id: std.id,
             schoolId: std.school_id,
@@ -405,7 +406,7 @@ export class DBStore {
           emergency_phone: std.emergencyPhone,
           address: std.address,
           photo_key: photoKey,
-          photo_url: cleanPhotoUrl,
+          photo_data_url: cleanPhotoUrl && cleanPhotoUrl.startsWith('http') ? cleanPhotoUrl : null,
           qr_token: std.qrToken,
           parent_id: std.parentId,
           parent_username: std.parentUsername,
@@ -758,7 +759,7 @@ export class DBStore {
           emergency_phone: newStudent.emergencyPhone,
           address: newStudent.address,
           photo_key: photoKey,
-          photo_url: cleanPhotoUrl,
+          photo_data_url: cleanPhotoUrl && cleanPhotoUrl.startsWith('http') ? cleanPhotoUrl : null,
           qr_token: newStudent.qrToken,
           parent_id: newStudent.parentId,
           parent_username: newStudent.parentUsername,
@@ -804,8 +805,11 @@ export class DBStore {
       if (updatedData.emergencyPhone !== undefined)
         dbPayload.emergency_phone = updatedData.emergencyPhone;
       if (updatedData.address !== undefined) dbPayload.address = updatedData.address;
-      if (cleanPhotoUrl !== undefined) dbPayload.photo_url = cleanPhotoUrl;
+      if (cleanPhotoUrl !== undefined) {
+        dbPayload.photo_data_url = cleanPhotoUrl.startsWith('http') ? cleanPhotoUrl : null;
+      }
       if (updatedData.photoKey !== undefined) dbPayload.photo_key = updatedData.photoKey;
+      if (updatedData.parentId !== undefined) dbPayload.parent_id = updatedData.parentId;
       if (updatedData.isActive !== undefined) dbPayload.is_active = updatedData.isActive;
       if (updatedData.parentUsername !== undefined)
         dbPayload.parent_username = updatedData.parentUsername;

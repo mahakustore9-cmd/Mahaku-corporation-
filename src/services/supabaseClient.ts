@@ -540,7 +540,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 3. STUDENTS TABLE (Stores short photo key & URL)
+-- 3. STUDENTS TABLE (Stores short photo key & clean bucket URL or null, NO base64)
 CREATE TABLE IF NOT EXISTS public.students (
     id VARCHAR(64) PRIMARY KEY,
     school_id VARCHAR(64) NOT NULL REFERENCES public.schools(id) ON DELETE CASCADE,
@@ -555,7 +555,7 @@ CREATE TABLE IF NOT EXISTS public.students (
     emergency_phone VARCHAR(20) NOT NULL,
     address VARCHAR(200),
     photo_key VARCHAR(80) DEFAULT 'std_photo.jpg',
-    photo_url VARCHAR(255),
+    photo_data_url TEXT,
     qr_token VARCHAR(80) UNIQUE NOT NULL,
     parent_id VARCHAR(64),
     parent_username VARCHAR(60),
@@ -563,10 +563,6 @@ CREATE TABLE IF NOT EXISTS public.students (
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
-
--- Migration for photo_url (removes heavy photo_data_url from table)
-ALTER TABLE public.students ADD COLUMN IF NOT EXISTS photo_url VARCHAR(255);
-ALTER TABLE public.students DROP COLUMN IF EXISTS photo_data_url;
 
 -- High speed indexes
 CREATE INDEX IF NOT EXISTS idx_students_qr ON public.students(qr_token);
