@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+@layer utilities {
+  /* Hide scrollbars for clean mobile feel */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* ========================================================
+   ID CARD PERFECT PRINT STYLESHEET (NO CUTOFF / CLEAN SIZING)
+   ======================================================== */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 8mm;
+  }
+
+  html,
+  body,
+  #root,
+  main {
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    min-height: auto !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* Hide app chrome, navigation, buttons, modals outside print */
+  header,
+  nav,
+  footer,
+  button,
+  .no-print,
+  .role-quick-switch,
+  .offline-indicator {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  .id-card-modal-backdrop {
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    display: block !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+    border: none !important;
+    backdrop-filter: none !important;
+  }
+
+  .id-card-modal-box {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 auto !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    display: block !important;
+  }
+
+  .id-card-print-area {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+    justify-content: center !important;
+    align-items: flex-start !important;
+    gap: 8mm !important;
+    margin: 0 auto !important;
+    padding: 4mm !important;
+    width: 100% !important;
+  }
+
+  .id-card-printable-item {
+    display: inline-block !important;
+    width: 330px !important;
+    max-width: 330px !important;
+    margin: 4mm !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+    box-shadow: none !important;
+    border: 2px solid #1e3a8a !important;
+    border-radius: 18px !important;
+  }
+}

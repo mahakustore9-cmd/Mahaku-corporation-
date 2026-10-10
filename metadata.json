@@ -1,0 +1,6 @@
+{
+  "name": "SurakshaTrack - Student Safety & QR Journey PWA",
+  "description": "School & Parent 5-step daily student journey tracking PWA with QR ID cards, auto voice alerts, and emergency contact.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
