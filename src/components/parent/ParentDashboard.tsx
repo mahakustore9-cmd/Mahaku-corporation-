@@ -48,8 +48,8 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   const { language, t } = useLanguage();
   const emergencyRef = useRef<HTMLDivElement>(null);
 
-  // Find strictly linked students only (Privacy Isolation)
-  const allStudents = dbStore.getStudents(currentUser.schoolId);
+  // Find strictly linked students only (Privacy Isolation across schools/parents)
+  const allStudents = dbStore.getStudents();
   const myLinkedStudents = allStudents.filter(
     (s) =>
       s.id === currentUser.studentId ||
@@ -63,7 +63,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
   // Sync student if initially null when database sync finishes
   useEffect(() => {
-    if (!student && myLinkedStudents.length > 0) {
+    if ((!student || !student.id) && myLinkedStudents.length > 0) {
       setStudent(myLinkedStudents[0]);
     }
   }, [myLinkedStudents, student]);
@@ -1077,7 +1077,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
       )}
 
       {/* QR Scanner Modal for Parent */}
-      {showQRScanner && (
+      {showQRScanner && student && (
         <QRScannerModal
           isOpen={showQRScanner}
           onClose={() => setShowQRScanner(false)}

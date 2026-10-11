@@ -718,8 +718,52 @@ export class DBStore {
   }
 
   public getStudentByQR(token: string): Student | null {
+    if (!token) return null;
     const students = this.getStudents();
-    return students.find((s) => s.qrToken === token || s.id === token) || null;
+    const cleanToken = token.trim();
+
+    // 1. Direct match by qrToken, id, or rollNo
+    let match = students.find(
+      (s) =>
+        s.qrToken === cleanToken ||
+        s.id === cleanToken ||
+        (s.rollNo && s.rollNo.toLowerCase() === cleanToken.toLowerCase())
+    );
+    if (match) return match;
+
+    // 2. Check JSON encoded QR tokens
+    try {
+      const parsed = JSON.parse(cleanToken);
+      const searchVal = parsed.qrToken || parsed.token || parsed.id || parsed.studentId || parsed.student_id;
+      if (searchVal) {
+        match = students.find((s) => s.qrToken === searchVal || s.id === searchVal);
+        if (match) return match;
+      }
+    } catch {
+      // not JSON
+    }
+
+    // 3. Check URL query params (e.g. ?token=XYZ or ?id=std_123)
+    if (cleanToken.includes('?')) {
+      try {
+        const queryPart = cleanToken.split('?')[1];
+        const params = new URLSearchParams(queryPart);
+        const paramVal = params.get('token') || params.get('qr') || params.get('id') || params.get('student_id');
+        if (paramVal) {
+          match = students.find((s) => s.qrToken === paramVal || s.id === paramVal);
+          if (match) return match;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // 4. Substring inclusion match
+    match =
+      students.find((s) => s.qrToken && cleanToken.includes(s.qrToken)) ||
+      students.find((s) => s.id && cleanToken.includes(s.id));
+
+    return match || null;
   }
 
   public addStudent(studentData: Omit<Student, 'id' | 'createdAt'>): Student {
@@ -995,26 +1039,94 @@ export class DBStore {
 
     const supabase = getSupabase();
     if (supabase) {
-      supabase
-        .from('daily_scans')
-        .upsert(
-          {
-            id: newScan.id,
-            student_id: newScan.studentId,
-            school_id: newScan.schoolId,
-            scan_date: newScan.scanDate,
-            step: newScan.step,
-            scanned_at: newScan.scannedAt,
-            scanned_by: newScan.scannedBy,
-            scanned_by_name: newScan.scannedByName,
-            scanned_by_role: newScan.scannedByRole,
-            notes: newScan.notes,
-          },
-          { onConflict: 'student_id,scan_date,step' }
-        )
-        .then(({ error }) => {
-          if (error) console.warn('Supabase recordScan error:', error);
-        });
+      try {
+        // 1. Ensure student exists in Supabase so foreign key constraint is satisfied
+        const { data: stdInDb } = await supabase
+          .from('students')
+          .select('id')
+          .eq('id', student.id)
+          .maybeSingle();
+
+        if (!stdInDb) {
+          await supabase.from('students').upsert({
+            id: student.id,
+            school_id: student.schoolId || 'sch_1791618205296',
+            school_name: student.schoolName || 'Mahaku Academy school ',
+            name: student.name,
+            roll_no: student.rollNo,
+            class_name: student.className,
+            blood_group: student.bloodGroup || 'B+',
+            father_name: student.fatherName || '',
+            mother_name: student.motherName || '',
+            parent_phone: student.parentPhone || '',
+            emergency_phone: student.emergencyPhone || student.parentPhone || '',
+            address: student.address || '',
+            photo_key: student.photoKey || 'std_photo.jpg',
+            photo_data_url: null,
+            qr_token: student.qrToken,
+            parent_id: student.parentId || null,
+            parent_username: student.parentUsername || null,
+            parent_password: student.parentPassword || null,
+            is_active: student.isActive ?? true,
+          });
+        }
+
+        // 2. Check if a scan for this student + date + step already exists in Supabase
+        const { data: existingDbScan } = await supabase
+          .from('daily_scans')
+          .select('id')
+          .eq('student_id', newScan.studentId)
+          .eq('scan_date', newScan.scanDate)
+          .eq('step', newScan.step)
+          .maybeSingle();
+
+        if (existingDbScan && existingDbScan.id) {
+          const { error: updateErr } = await supabase
+            .from('daily_scans')
+            .update({
+              scanned_at: newScan.scannedAt,
+              scanned_by: newScan.scannedBy,
+              scanned_by_name: newScan.scannedByName,
+              scanned_by_role: newScan.scannedByRole,
+              notes: newScan.notes,
+            })
+            .eq('id', existingDbScan.id);
+          if (updateErr) console.warn('Supabase update scan error:', updateErr);
+        } else {
+          const { error: insertErr } = await supabase
+            .from('daily_scans')
+            .insert({
+              id: newScan.id,
+              student_id: newScan.studentId,
+              school_id: newScan.schoolId || 'sch_1791618205296',
+              scan_date: newScan.scanDate,
+              step: newScan.step,
+              scanned_at: newScan.scannedAt,
+              scanned_by: newScan.scannedBy,
+              scanned_by_name: newScan.scannedByName,
+              scanned_by_role: newScan.scannedByRole,
+              notes: newScan.notes,
+            });
+          if (insertErr) {
+            console.warn('Supabase insert scan error:', insertErr);
+            // Fallback: upsert on primary key id
+            await supabase.from('daily_scans').upsert({
+              id: newScan.id,
+              student_id: newScan.studentId,
+              school_id: newScan.schoolId || 'sch_1791618205296',
+              scan_date: newScan.scanDate,
+              step: newScan.step,
+              scanned_at: newScan.scannedAt,
+              scanned_by: newScan.scannedBy,
+              scanned_by_name: newScan.scannedByName,
+              scanned_by_role: newScan.scannedByRole,
+              notes: newScan.notes,
+            });
+          }
+        }
+      } catch (sbErr) {
+        console.warn('Supabase recordScan error:', sbErr);
+      }
     }
 
     const voiceTemplate = JOURNEY_STEPS[step].voiceTemplateHi;
